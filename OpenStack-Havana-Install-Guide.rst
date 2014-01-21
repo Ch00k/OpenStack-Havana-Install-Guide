@@ -626,7 +626,6 @@ Nova-*
    logdir=/var/log/nova
    state_path=/var/lib/nova
    lock_path=/run/lock/nova
-   verbose=True
    api_paste_config=/etc/nova/api-paste.ini
    compute_scheduler_driver=nova.scheduler.simple.SimpleScheduler
    rabbit_host=10.10.10.51
@@ -762,9 +761,7 @@ Cinder
    iscsi_helper=ietadm
    volume_name_template = volume-%s
    volume_group = cinder-volumes
-   verbose = True
    auth_strategy = keystone
-   #osapi_volume_listen_port=5900
 
 * Remove Cinder's SQLite database::
 
