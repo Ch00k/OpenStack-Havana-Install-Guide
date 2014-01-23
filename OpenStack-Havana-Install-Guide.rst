@@ -107,7 +107,7 @@ You may use the following command to install all the packages used throughout th
    apt-get install -y mysql-server python-mysqldb rabbitmq-server ntp vlan bridge-utils keystone glance openvswitch-controller openvswitch-switch openvswitch-datapath-dkms neutron-server neutron-plugin-openvswitch neutron-plugin-openvswitch-agent dnsmasq neutron-dhcp-agent neutron-l3-agent neutron-metadata-agent kvm libvirt-bin pm-utils nova-api nova-cert novnc nova-consoleauth nova-scheduler nova-novncproxy nova-doc nova-conductor nova-compute-kvm cinder-api cinder-scheduler cinder-volume openstack-dashboard memcached && dpkg --purge openstack-dashboard-ubuntu-theme
 
 
-MySQL & RabbitMQ
+MySQL, RabbitMQ
 ----------------
 
 * Install MySQL::
@@ -566,7 +566,7 @@ KVM
    ]
 
 
-* Delete default virtual bridge ::
+* Delete default virtual bridge::
 
    virsh net-destroy default
    virsh net-undefine default
@@ -581,7 +581,7 @@ KVM
 
    env libvirtd_opts="-d -l"
 
-* Edit :code:`/etc/default/libvirt-bin` file ::
+* Edit :code:`/etc/default/libvirt-bin` file::
 
    libvirtd_opts="-d -l"
 
@@ -762,6 +762,7 @@ Cinder
    volume_name_template = volume-%s
    volume_group = cinder-volumes
    auth_strategy = keystone
+   volume_clear = none
 
 * Remove Cinder's SQLite database::
 
@@ -800,6 +801,125 @@ Cinder
 * Verify if cinder services are running::
 
    cd /etc/init.d/; for i in $( ls cinder-* ); do sudo service $i status; cd /root/; done
+
+
+Swift
+=====
+
+* Install the required packages::
+
+   apt-get -y install swift swift-account swift-container swift-object swift-proxy openssh-server memcached python-pip python-netifaces python-xattr python-memcache xfsprogs python-keystoneclient python-swiftclient python-webob
+
+* Create and populate configuration diretories::
+
+   mkdir -p /etc/swift
+   chown -R swift:swift /etc/swift/
+
+* Create :code:`/etc/swift/swift.conf` like the following::
+
+   [swift-hash]
+   swift_hash_path_suffix = openstacktest
+
+* Create and mount an XFS partition for object storage::
+   
+   fdisk /dev/sdc
+   mkfs.xfs /dev/sdc1
+   echo "/dev/sdc1 /srv/node/sdc1 xfs noatime,nodiratime,nobarrier,logbufs=8 0 0" >> /etc/fstab
+   mkdir -p /srv/node/sdc1
+   mount /srv/node/sdc1
+   chown -R swift:swift /srv/node
+
+* Create self-signed cert for SSL::
+
+   cd /etc/swift
+   openssl req -new -x509 -nodes -out cert.crt -keyout cert.key
+
+* Edit :code:`/etc/memcached.conf` file::
+
+   sed -i 's/127.0.0.1/10.10.10.51/g' /etc/memcached.conf
+
+* Restart the memcached server::
+   
+   service memcached restart
+
+* Because the distribution packages do not include a copy of the keystoneauth middleware, ensure that the proxy server includes them::
+
+   git clone https://github.com/openstack/swift.git
+   cd swift
+   python setup.py install
+
+* Create :code:`/etc/swift/proxy-server.conf`::
+
+   [DEFAULT]
+   bind_port = 8080
+   user = swift
+   [pipeline:main]
+   pipeline = healthcheck cache authtoken keystoneauth proxy-server
+   [app:proxy-server]
+   use = egg:swift
+   allow_account_management = true
+   account_autocreate = true
+   [filter:keystoneauth]
+   use = egg:swift
+   operator_roles = Member,admin,swiftoperator
+   [filter:authtoken]
+   paste.filter_factory = keystoneclient.middleware.auth_token:filter_factory
+   delay_auth_decision = true
+   signing_dir = /home/swift/keystone-signing
+   auth_protocol = http
+   auth_host = 10.10.10.51
+   auth_port = 35357
+   admin_token = openstacktest
+   admin_tenant_name = service
+   admin_user = swift
+   admin_password = openstacktest
+   [filter:cache]
+   use = egg:swift
+   [filter:catch_errors]
+   use = egg:swift
+   [filter:healthcheck]
+   use = egg:swift
+
+* Create the :code:`signing_dir` and set its permissions accordingly::
+   
+   mkdir -p /home/swift/keystone-signing
+   chown -R swift:swift /home/swift/keystone-signing
+
+* Create the account, container, and object rings::
+
+   cd /etc/swift
+   swift-ring-builder account.builder create 18 3 1
+   swift-ring-builder container.builder create 18 3 1
+   swift-ring-builder object.builder create 18 3 1
+
+* Add entries to each ring::
+
+   swift-ring-builder account.builder add z1-10.10.10.51:6002/sdc1 100
+   swift-ring-builder container.builder add z1-10.10.10.51:6001/sdc1 100
+   swift-ring-builder object.builder add z1-10.10.10.51:6000/sdc1 100
+
+* Verify the ring contents for each ring::
+   
+   swift-ring-builder account.builder
+   swift-ring-builder container.builder
+   swift-ring-builder object.builder
+
+* Rebalance the rings::
+
+   swift-ring-builder account.builder rebalance
+   swift-ring-builder container.builder rebalance
+   swift-ring-builder object.builder rebalance
+
+* Make sure the swift user owns all configuration files::
+
+   chown -R swift:swift /etc/swift
+
+* Start Swift services::
+
+   swift-init proxy start
+   swift-init main start
+   service rsyslog restart
+   service memcached restart 
 
 
 Horizon

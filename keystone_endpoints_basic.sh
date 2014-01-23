@@ -108,6 +108,7 @@ keystone service-create --name glance --type image --description 'OpenStack Imag
 keystone service-create --name keystone --type identity --description 'OpenStack Identity'
 keystone service-create --name ec2 --type ec2 --description 'OpenStack EC2 service'
 keystone service-create --name neutron --type network --description 'OpenStack Networking service'
+keystone service-create --name swift --type object-store --description 'OpenStack Object Storage service'
 
 create_endpoint () {
   case $1 in
@@ -128,6 +129,9 @@ create_endpoint () {
     ;;
     network)
     keystone endpoint-create --region $KEYSTONE_REGION --service-id $2 --publicurl 'http://'"$EXT_HOST_IP"':9696/' --adminurl 'http://'"$HOST_IP"':9696/' --internalurl 'http://'"$HOST_IP"':9696/'
+    ;;
+    object-store)
+    keystone endpoint-create --region $KEYSTONE_REGION --service-id $2 --publicurl 'http://'"$EXT_HOST_IP"':8080/v1/AUTH_%(tenant_id)s' --adminurl 'http://'"$HOST_IP"':8080/' --internalurl 'http://'"$HOST_IP"':8080/v1/AUTH_%(tenant_id)s'
     ;;
   esac
 }
