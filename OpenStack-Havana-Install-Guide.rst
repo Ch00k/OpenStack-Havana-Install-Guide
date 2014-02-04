@@ -1,3 +1,13 @@
+========
+WARNING!
+========
+
+
+==================================================================================================================================
+This fork is no longer being maintained/updated. Please use `this guide <https://github.com/Ch00k/openstack-install-aio>`_ instead
+==================================================================================================================================
+
+
 ================================
   OpenStack Havana Install Guide
 ================================
@@ -65,6 +75,15 @@ Preparing Ubuntu
 
    apt-get install ubuntu-cloud-keyring python-software-properties software-properties-common python-keyring
    echo deb http://ubuntu-cloud.archive.canonical.com/ubuntu precise-proposed/havana main >> /etc/apt/sources.list.d/havana.list
+
+Note: the official documentation (see http://docs.openstack.org/havana/install-guide/install/apt/content/basics-packages.html) do propone another procedure that we report here as "alternative" procedure :-):
+
+* official procedureto add Havana repositories::
+
+   apt-get install python-software-properties
+   add-apt-repository cloud-archive:havana
+
+(end of "alternative/official" procedure)
 
 * Update your system::
 
@@ -668,7 +687,7 @@ Nova-*
    service_neutron_metadata_proxy = True
    neutron_metadata_proxy_shared_secret = helloOpenStack
    metadata_host = 10.10.10.51
-   metadata_listen = 10.10.10.51
+   metadata_listen = 0.0.0.0
    metadata_listen_port = 8775
    
    # Compute #
@@ -1108,11 +1127,309 @@ http://docs.openstack.org/grizzly/basic-install/apt/content/basic-install_operat
 Adding a Compute Node
 =====================
 
-All this document do refer to a "demo" installation, optimization of services allocated on servers is out of the scope of this document.
-Nevertheless we think that can be useful and appreciated to indicate the minimum operations that are necessary to add a compute node.
+All this document do refer to a "demo" installation, optimization of services allocation on servers is out of the scope of this document.
+Nevertheless we think that can be useful and appreciated to indicate the minimum operations that are necessary to add a compute node once you finished previous steps and you have a working ALL-IN-ONE installation.
+
+This is the assumed IP plan for the second compute node:
+====================
+:Node Role: Controller, Network Controller and Compute Node
+:Nics: eth0 (10.10.10.52), eth1 (192.168.1.252)
+
+Of course you can follow this guide adding as many compute nodes you want...just change network parameters coherently...
+...and always mind that an optimization of the services allocated on each node is out of the scope of THIS document
+
+10.1. Preparing the Node
+-----------------
+
+* After you install Ubuntu 12.04 Server 64bits, Go in sudo mode and don't leave it until the end of this guide::
+
+   sudo su
+
+* Add Havana repositories::
+
+   apt-get install ubuntu-cloud-keyring python-software-properties software-properties-common python-keyring
+   echo deb http://ubuntu-cloud.archive.canonical.com/ubuntu precise-proposed/havana main >> /etc/apt/sources.list.d/havana.list
+
+* Update your system::
+
+   apt-get update
+   apt-get upgrade
+   apt-get dist-upgrade
 
 
-TODO
+It could be necessary to reboot your system in case you have a kernel upgrade
+
+* Install ntp service::
+
+   apt-get install -y ntp
+
+
+* Configure the NTP server to follow the controller node::
+
+   #Comment the ubuntu NTP servers
+   sed -i 's/server 0.ubuntu.pool.ntp.org/#server 0.ubuntu.pool.ntp.org/g' /etc/ntp.conf
+   sed -i 's/server 1.ubuntu.pool.ntp.org/#server 1.ubuntu.pool.ntp.org/g' /etc/ntp.conf
+   sed -i 's/server 2.ubuntu.pool.ntp.org/#server 2.ubuntu.pool.ntp.org/g' /etc/ntp.conf
+   sed -i 's/server 3.ubuntu.pool.ntp.org/#server 3.ubuntu.pool.ntp.org/g' /etc/ntp.conf
+
+   #Set the compute node to follow up your conroller node
+   sed -i 's/server ntp.ubuntu.com/server 10.10.10.51/g' /etc/ntp.conf
+
+   service ntp restart
+
+
+* Install ntp service::
+
+   apt-get install -y vlan bridge-utils
+
+* Enable IP_Forwarding::
+
+   sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+   
+   # To save you from rebooting NOW, perform the following
+   sysctl net.ipv4.ip_forward=1
+
+
+10.2. Networking
+-----------------
+
+* Setup Networking (in usual /etc/network/interfaces file)::
+
+   # The primary network interface
+   auto eth0
+    iface eth0 inet static
+    address 10.10.10.52
+    netmask 255.255.255.0
+
+   auto eth1
+    iface eth1 inet static
+    address 192.168.1.252
+    netmask 255.255.255.0
+    gateway 192.168.1.1
+    dns-nameservers 192.168.1.1
+
+
+Attention: gateway to internet is essential to install all packets so we configured it on eth1 coherently with network (so far in this guide) BUT since we should have only ONE internet access for the cloud MIND to remove it at the end of the installation!
+
+10.3. KVM
+-----------------
+
+* make sure that your hardware enables virtualization::
+
+   apt-get install -y cpu-checker
+   kvm-ok
+   
+* Attention: in case you get something like::
+
+   INFO: /dev/kvm does not exist
+   HINT:   sudo modprobe kvm_intel
+   INFO: Your CPU supports KVM extensions
+   KVM acceleration can be used
+
+* Just digit the following::
+   
+   sudo modprobe kvm_intel
+   kvm-ok
+   
+* Then when you finally get something like::
+   
+   INFO: /dev/kvm does not exist
+   HINT:   sudo modprobe kvm_intel
+   
+   .....THEN JUST GO AHEAD AND LIVE IN PEACE :-)
+
+* Finally you will get a good response. Now, move to install kvm and configure it::
+   
+   apt-get install -y kvm libvirt-bin pm-utils
+   
+* Delete default virtual bridge::
+   
+   virsh net-destroy default
+   virsh net-undefine default
+
+* Restart the libvirt service and dbus to load the new values::
+   
+   service dbus restart && service libvirt-bin restart
+
+10.4. OpenVSwitch
+-----------------
+
+* It's necessary to install the openVSwitch::
+  
+   apt-get install -y openvswitch-controller openvswitch-switch openvswitch-datapath-dkms
+
+
+* I suggest to restart the service after that::
+  
+   /etc/init.d/openvswitch-switch restart
+
+* Then create the bridges::
+
+   #add br-int,that will be used for VM integration
+   ovs-vsctl add-br br-int
+
+
+10.5. Neutron
+-----------------
+
+* Install the Neutron openvswitch agent::
+
+   apt-get -y install neutron-plugin-openvswitch-agent
+
+* Edit the OVS plugin configuration file (/etc/neutron/plugins/openvswitch/ovs_neutron_plugin.ini) with::
+
+   #Under the database section
+   [DATABASE]
+   connection = mysql://neutron:openstacktest@10.10.10.51/neutron
+
+   #Under the OVS section
+   [OVS]
+   tenant_network_type = gre
+   tunnel_id_ranges = 1:1000
+   integration_bridge = br-int
+   tunnel_bridge = br-tun
+   local_ip = 10.10.10.52
+   enable_tunneling = True
+
+   #Firewall driver for realizing neutron security group function
+   [SECURITYGROUP]
+   firewall_driver = neutron.agent.linux.iptables_firewall.OVSHybridIptablesFirewallDriver
+   
+   [agent]
+
+* Edit the main Neutron configuration file (/etc/neutron/neutron.conf)::
+
+   rabbit_host = 10.10.10.51
+   
+   [keystone_authtoken]
+   auth_host = 10.10.10.51
+   auth_port = 35357
+   auth_protocol = http
+   admin_tenant_name = service
+   admin_user = neutron
+   admin_password = openstacktest
+   signing_dir = /var/lib/neutron/keystone-signing
+
+   [DATABASE]
+   connection = mysql://neutron:openstacktest@10.10.10.51/neutron
+
+* Restart all the services::
+
+   service neutron-plugin-openvswitch-agent restart
+
+
+10.6. Nova
+-----------------
+
+* Install nova's required components for the compute node::
+
+   apt-get install -y nova-compute-kvm
+
+
+Note: If your host does not support kvm virtualization, the nova-compute-kvm switch nova-compute-qemu
+
+
+Meanwhile / etc / nova / nova-compute.conf configuration file libvirt_type = qemu
+
+
+* Now modify authtoken section in the /etc/nova/api-paste.ini file to this::
+
+   [filter:authtoken]
+   paste.filter_factory = keystoneclient.middleware.auth_token:filter_factory
+   auth_host = 10.10.10.51
+   auth_port = 35357
+   auth_protocol = http
+   admin_tenant_name = service
+   admin_user = nova
+   admin_password = openstack
+   signing_dirname = /tmp/keystone-signing-nova
+   # Workaround for https://bugs.launchpad.net/nova/+bug/1154809
+   auth_version = v2.0
+
+
+* Edit /etc/nova/nova-compute.conf file::
+
+   [DEFAULT]
+   libvirt_type=kvm
+   compute_driver=libvirt.LibvirtDriver
+   libvirt_ovs_bridge=br-int
+   libvirt_vif_type=ethernet
+   libvirt_vif_driver=nova.virt.libvirt.vif.LibvirtHybridOVSBridgeDriver
+   libvirt_use_virtio_for_bridges=True
+
+* Edit /etc/nova/nova.conf file::
+
+   [DEFAULT]
+   logdir=/var/log/nova
+   state_path=/var/lib/nova
+   lock_path=/run/lock/nova
+   verbose=True
+   api_paste_config=/etc/nova/api-paste.ini
+   compute_scheduler_driver=nova.scheduler.simple.SimpleScheduler
+   rabbit_host=10.10.10.51
+   nova_url=http://10.10.10.51:8774/v1.1/
+   sql_connection=mysql://nova:openstacktest@10.10.10.51/nova
+   root_helper=sudo nova-rootwrap /etc/nova/rootwrap.conf
+
+   # Auth
+   use_deprecated_auth=false
+   auth_strategy=keystone
+
+   # Imaging service
+   glance_api_servers=10.10.10.51:9292
+   image_service=nova.image.glance.GlanceImageService
+
+   # Vnc configuration
+   novnc_enabled=true
+   novncproxy_base_url=http://192.168.1.251:6080/vnc_auto.html
+   novncproxy_port=6080
+   vncserver_proxyclient_address=10.10.10.52
+   vncserver_listen=0.0.0.0
+
+   # Network settings
+   network_api_class=nova.network.neutronv2.api.API
+   neutron_url=http://10.10.10.51:9696
+   neutron_auth_strategy=keystone
+   neutron_admin_tenant_name=service
+   neutron_admin_username=neutron
+   neutron_admin_password=openstacktest
+   neutron_admin_auth_url=http://10.10.10.51:35357/v2.0
+   libvirt_vif_driver=nova.virt.libvirt.vif.LibvirtHybridOVSBridgeDriver
+   linuxnet_interface_driver=nova.network.linux_net.LinuxOVSInterfaceDriver
+   #If you want Neutron + Nova Security groups
+   firewall_driver=nova.virt.firewall.NoopFirewallDriver
+   security_group_api=neutron
+   #If you want Nova Security groups only, comment the two lines above and uncomment line -1-.
+   #-1-firewall_driver=nova.virt.libvirt.firewall.IptablesFirewallDriver
+
+   #Metadata
+   service_neutron_metadata_proxy = True
+   neutron_metadata_proxy_shared_secret = helloOpenStack
+
+   # Compute #
+   compute_driver=libvirt.LibvirtDriver
+
+   # Cinder #
+   volume_api_class=nova.volume.cinder.API
+   osapi_volume_listen_port=5900
+   cinder_catalog_info=volume:cinder:internalURL
+
+* Restart nova-* services::
+
+   cd /etc/init.d/; for i in $( ls nova-* ); do sudo service $i restart; cd;done
+   
+   ...and verify they're running:
+   
+   cd /etc/init.d/; for i in $( ls nova-* ); do sudo service $i status; cd;done
+
+* Check for the smiling faces on nova-* services to confirm your installation::
+
+   nova-manage service list
+
+
+Note: If everything works you can see the new node either with nova-manage or via web interface (with admin user in admin tab).
+Then, if you create new VM, from this point on you will be see that the VMs are equally distributed on the hypervisors (the physical machines)
+
 
 
 Licensing
@@ -1131,9 +1448,17 @@ Marco Fornaro  : marco.fornaro@gmail.com
 Credits
 =======
 
-This work has been based on:
+This work has been mainly based on:
 
-TODO
+->two guides of Bilel Msekni for Grizzly Installation:
+https://github.com/mseknibilel/OpenStack-Grizzly-Install-Guide/blob/OVS_SingleNode/OpenStack_Grizzly_Install_Guide.rst
+https://github.com/mseknibilel/OpenStack-Grizzly-Install-Guide/blob/OVS_MultiNode/OpenStack_Grizzly_Install_Guide.rst
+
+->one guide from xidianpanpei (multinode havana installation, chinese language):
+https://github.com/xidianpanpei/OpenStack-Havana-Install-Guide-CN-OVS_MutliNode/blob/master/OpenStack_Grizzly_Install_Guide.rst
+
+
+
 
 To do
 =====
